@@ -1,0 +1,134 @@
+<!-- templates/dashboard.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Dashboard - SmartPose</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>Live Posture Monitoring</h1>
+        <div class="status-card">
+            <h3>Current Prediction</h3>
+            <div id="currentPrediction" class="prediction">--</div>
+            <div id="timestamp" class="timestamp" style="margin-top: 10px;"></div>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-box">
+                <div class="stat-label">Last 10s - Good (Benar)</div>
+                <div class="stat-number" id="countBenar10s">0</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Last 10s - Bad (Salah)</div>
+                <div class="stat-number" id="countSalah10s">0</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Last 10s - Stand (Berdiri)</div>
+                <div class="stat-number" id="countBerdiri10s">0</div>
+            </div>
+        </div>
+
+        <div class="stats-grid">
+            <div class="stat-box">
+                <div class="stat-label">Total Good (Benar)</div>
+                <div class="stat-number" id="totalBenar">0</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Total Bad (Salah)</div>
+                <div class="stat-number" id="totalSalah">0</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">Total Stand (Berdiri)</div>
+                <div class="stat-number" id="totalBerdiri">0</div>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <h3>Prediction Distribution (Last 10 seconds)</h3>
+            <canvas id="liveChart"></canvas>
+        </div>
+
+        <div class="recent-list">
+            <h3>Recent Predictions</h3>
+            <div id="recentList"></div>
+        </div>
+    </div>
+
+    <script>
+        let chart;
+
+        async function fetchData() {
+            const response = await fetch('/live_data');
+            const data = await response.json();
+            if (data.error) return;
+
+            // Update current prediction
+            const pred = data.latest_prediction;
+            if (pred) {
+                const predDiv = document.getElementById('currentPrediction');
+                predDiv.textContent = pred.prediction;
+                predDiv.className = `prediction ${pred.prediction}`;
+                document.getElementById('timestamp').textContent = new Date(pred.epoch_ms).toLocaleTimeString();
+            }
+
+            // Update stats 10s
+            document.getElementById('countBenar10s').textContent = data.counts_last_10s.Benar || 0;
+            document.getElementById('countSalah10s').textContent = data.counts_last_10s.Salah || 0;
+            document.getElementById('countBerdiri10s').textContent = data.counts_last_10s.Berdiri || 0;
+
+            // Update total stats
+            document.getElementById('totalBenar').textContent = data.total_counts.Benar || 0;
+            document.getElementById('totalSalah').textContent = data.total_counts.Salah || 0;
+            document.getElementById('totalBerdiri').textContent = data.total_counts.Berdiri || 0;
+
+            // Update chart (bar chart)
+            const labels = ['Benar', 'Salah', 'Berdiri'];
+            const values = [
+                data.counts_last_10s.Benar || 0,
+                data.counts_last_10s.Salah || 0,
+                data.counts_last_10s.Berdiri || 0
+            ];
+            if (chart) {
+                chart.data.datasets[0].data = values;
+                chart.update();
+            } else {
+                const ctx = document.getElementById('liveChart').getContext('2d');
+                chart = new Chart(ctx, {
+                    type: 'bar',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            label: 'Count in last 10s',
+                            data: values,
+                            backgroundColor: ['#51cf66', '#ff6b6b', '#ffd43b'],
+                            borderRadius: 10
+                        }]
+                    },
+                    options: { responsive: true, maintainAspectRatio: true }
+                });
+            }
+
+            // Update recent list
+            const recentDiv = document.getElementById('recentList');
+            recentDiv.innerHTML = '';
+            (data.recent_predictions || []).slice().reverse().forEach(p => {
+                const item = document.createElement('div');
+                item.className = 'recent-item';
+                item.innerHTML = `
+                    <span>${new Date(p.epoch_ms).toLocaleTimeString()}</span>
+                    <span class="badge ${p.prediction}">${p.prediction}</span>
+                `;
+                recentDiv.appendChild(item);
+            });
+        }
+
+        setInterval(fetchData, 1000);
+        fetchData();
+    </script>
+</body>
+</html>

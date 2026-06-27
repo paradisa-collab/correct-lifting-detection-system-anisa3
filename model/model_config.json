@@ -1,0 +1,9 @@
+{
+    "confidence_threshold": 0.2,
+    "thresh_ergo": 0.7,
+    "thresh_non": 0.6,
+    "buzzer_duration": 1.5,
+    "prediction_interval_ms": 300,
+    "buzzer_enabled": true,
+    "sensor_stale_timeout_ms": 5000
+}

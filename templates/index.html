@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SmartPose - Lifting Position Detection</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>
+                WEARABLE DEVICE BERBASIS IOT UNTUK KLASIFIKASI POSTUR TUBUH MENGGUNAKAN ALGORITMA XGBOOST 
+            </h1>
+            <p>Real-time Monitoring untuk Mencegah Musculoskeletal Disorders</p>
+        </div>
+
+        <!-- Error Message Display -->
+        {% if error_message %}
+        <div class="error-alert">
+            <strong>Error:</strong> {{ error_message }}
+        </div>
+        {% endif %}
+
+        <!-- Status Info - Layout 3:1 (Prediksi : History) -->
+        <div class="status-info">
+
+            <div class="settings-card">
+                <h3>Confidence Thresholds</h3>
+                <div class="threshold-setting">
+                    <label>Ergonomis = 
+                        <span id="threshErgoValue">0.55</span>
+                    </label>
+                    <input type="range" id="threshErgo" min="0.10" max="0.95" step="0.01" value="0.55">
+                    <small>Minimal keyakinan untuk menyatakan <strong>ergonomis</strong></small>
+                </div>
+                <div class="threshold-setting">
+                    <label>Non-Ergonomis = 
+                        <span id="threshNonValue">0.40</span>
+                    </label>
+                    <input type="range" id="threshNon" min="0.10" max="0.95" step="0.01" value="0.40">
+                    <small>Minimal keyakinan untuk menyatakan <strong>non-ergonomis</strong></small>
+                </div>
+                <button id="resetThresholds" class="btn-reset">Reset ke Default</button>
+                <!-- <p class="info-note">* Jika kedua ambang tidak terpenuhi, hasil = "tidak pasti"</p> -->
+            </div>
+
+            <!-- Kiri: card prediksi (3 bagian) -->
+            <div class="status-card prediction-card" id="predictionCard">
+                <h2>Latest Prediction</h2>
+                <h1 id="latestPrediction" class="prediction-text">--</h1>
+                <p id="confidence" class="confidence-text">Confidence: --%</p>
+            </div>
+
+            <!-- Kanan: History Log Prediksi (1 bagian) -->
+            <div class="history-card">
+                <h3>Prediction Log</h3>
+                <ul class="history-log" id="predictionHistoryList">
+                    <li class="empty-history">Belum ada prediksi</li>
+                </ul>
+            </div>
+
+            
+        </div>
+
+        <!-- Charts Container -->
+        <div class="charts-container">
+            <div class="chart-card">
+                <h3>Acceleration Magnitude (|a|) — MPU1 & MPU2</h3>
+                <canvas id="accChart"></canvas>
+            </div>
+            <!--<div class="chart-card">
+                <h3>Gyroscope Magnitude (|ω|) — MPU1 & MPU2</h3>
+                <canvas id="gyroChart"></canvas>
+            </div>-->
+        </div>
+
+        <!-- Tables Container: MPU1, MPU2, dan BME280 latest -->
+        <div class="tables-container">
+            <div class="table-card">
+                <h3>Latest MPU1 Data (10 rows)</h3>
+                <table id="tbl1">
+                    <thead>
+                        <tr><th>DateTime</th><th>ax</th><th>ay</th><th>az</th></tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+            <div class="table-card">
+                <h3>Latest MPU2 Data (10 rows)</h3>
+                <table id="tbl2">
+                    <thead>
+                        <tr><th>DateTime</th><th>ax</th><th>ay</th><th>az</th></tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Navigation Links -->
+        <div class="nav-links">
+            <a href="/dashboard" class="btn-link">View Dashboard</a>
+        </div>
+    </div>
+
+    <script>
+        const refreshInterval = 300; // ms
+        let fileId = "{{ file_id or '' }}";
+        let lastFetchTime = null;
+        let lastProcessedEpochMs = 0;
+        let predictionInterval = 600;
+        let currentThreshErgo = 0.70;
+        let currentThreshNon = 0.60;
+        
+        // Variabel global untuk menyimpan data sensor terbaru (untuk dikirim ke POST /predict)
+        let latestMpu1 = null;
+        let latestMpu2 = null;
+
+        // Fungsi load/save threshold ke localStorage
+        function loadThresholds() {
+            const savedErgo = localStorage.getItem('thresh_ergo');
+            const savedNon = localStorage.getItem('thresh_non');
+            if (savedErgo !== null) currentThreshErgo = parseFloat(savedErgo);
+            if (savedNon !== null) currentThreshNon = parseFloat(savedNon);
+            // Update slider dan tampilan
+            document.getElementById('threshErgo').value = currentThreshErgo;
+            document.getElementById('threshNon').value = currentThreshNon;
+            document.getElementById('threshErgoValue').innerText = currentThreshErgo.toFixed(2);
+            document.getElementById('threshNonValue').innerText = currentThreshNon.toFixed(2);
+        }
+
+        function saveThresholds() {
+            localStorage.setItem('thresh_ergo', currentThreshErgo);
+            localStorage.setItem('thresh_non', currentThreshNon);
+        }
+
+        // Event listener untuk slider
+        function initThresholdControls() {
+            const sliderErgo = document.getElementById('threshErgo');
+            const sliderNon = document.getElementById('threshNon');
+            const resetBtn = document.getElementById('resetThresholds');
+            
+            sliderErgo.addEventListener('input', (e) => {
+                currentThreshErgo = parseFloat(e.target.value);
+                document.getElementById('threshErgoValue').innerText = currentThreshErgo.toFixed(2);
+                saveThresholds();
+                // Optional: langsung prediksi ulang
+                fetchPrediction();
+            });
+            sliderNon.addEventListener('input', (e) => {
+                currentThreshNon = parseFloat(e.target.value);
+                document.getElementById('threshNonValue').innerText = currentThreshNon.toFixed(2);
+                saveThresholds();
+                fetchPrediction();
+            });
+            resetBtn.addEventListener('click', () => {
+                currentThreshErgo = 0.55;
+                currentThreshNon = 0.40;
+                sliderErgo.value = currentThreshErgo;
+                sliderNon.value = currentThreshNon;
+                document.getElementById('threshErgoValue').innerText = currentThreshErgo.toFixed(2);
+                document.getElementById('threshNonValue').innerText = currentThreshNon.toFixed(2);
+                saveThresholds();
+                fetchPrediction();
+            });
+        }
+        
+        // --- History Prediksi ---
+        let predictionHistory = [];     // simpan objek {label, confidence, timestamp}
+        const MAX_HISTORY = 20;
+
+        // Fungsi render history ke dalam <ul>
+        function renderHistory() {
+            const historyList = document.getElementById('predictionHistoryList');
+            if (!historyList) return;
+            
+            if (predictionHistory.length === 0) {
+                historyList.innerHTML = '<li class="empty-history">Belum ada prediksi</li>';
+                return;
+            }
+            
+            let html = '';
+            // tampilkan dari yang terbaru ke yang lama
+            for (let i = 0; i < predictionHistory.length; i++) {
+                const entry = predictionHistory[i];
+                let labelClass = '';
+                if (entry.label === 'ergonomis') labelClass = 'style="color:#2ecc71;"';
+                else if (entry.label === 'non-ergonomis') labelClass = 'style="color:#e74c3c;"';
+                else labelClass = 'style="color:#f39c12;"';
+                
+                html += `
+                    <li>
+                        <span class="label" ${labelClass}>${entry.label}</span>
+                        <span class="time">${entry.time}</span><br>
+                        <span class="confidence">Conf: ${entry.confidence}%</span>
+                    </li>
+                `;
+            }
+            historyList.innerHTML = html;
+        }
+
+        // Tambah prediksi baru ke history (paling atas)
+        function addToHistory(label, confidencePercent) {
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute:'2-digit', second:'2-digit' });
+            predictionHistory.unshift({
+                label: label,
+                confidence: confidencePercent,
+                time: timeStr
+            });
+            // batasi panjang history
+            if (predictionHistory.length > MAX_HISTORY) predictionHistory.pop();
+            renderHistory();
+        }
+
+        // Initialize Charts
+        const accCtx = document.getElementById('accChart').getContext('2d');
+
+        const accChart = new Chart(accCtx, {
+            type: 'line',
+            data: { labels: [], datasets: [
+                { label: 'MPU1 |a| (g)', data: [], borderColor: 'rgb(75,192,192)', backgroundColor: 'rgba(75,192,192,0.1)', borderWidth: 2, tension: 0.2, pointRadius: 0, fill: true },
+                { label: 'MPU2 |a| (g)', data: [], borderColor: 'rgb(255,159,64)', backgroundColor: 'rgba(255,159,64,0.1)', borderWidth: 2, tension: 0.2, pointRadius: 0, fill: true }
+            ] },
+            options: { responsive: true, maintainAspectRatio: true, animation: false, scales: { x: { display: true, title: { display: true, text: 'Time' } }, y: { display: true, title: { display: true, text: 'Acceleration (g)' }, min: 0 } }, plugins: { legend: { display: true, position: 'top' }, filler: { propagate: true } } }
+        });
+
+        //const gyroChart = new Chart(gyroCtx, {
+         //   type: 'line',
+        //    data: { labels: [], datasets: [
+        //        { label: 'MPU1 |ω| (dps)', data: [], borderColor: 'rgb(153,102,255)', backgroundColor: 'rgba(153,102,255,0.1)', borderWidth: 2, tension: 0.2, pointRadius: 0, fill: true },
+         //       { label: 'MPU2 |ω| (dps)', data: [], borderColor: 'rgb(255,99,132)', backgroundColor: 'rgba(255,99,132,0.1)', borderWidth: 2, tension: 0.2, pointRadius: 0, fill: true }
+        //    ] },
+         //   options: { responsive: true, maintainAspectRatio: true, animation: false, scales: { x: { display: true, title: { display: true, text: 'Time' } }, y: { display: true, title: { display: true, text: 'Gyroscope (dps)' }, min: 0 } }, plugins: { legend: { display: true, position: 'top' }, filler: { propagate: true } } }
+       // });
+
+        async function fetchLatest() {
+            const now = Date.now();
+            lastFetchTime = now;
+            const url = '/latest' + (fileId ? ('?id=' + encodeURIComponent(fileId) + '&n=300') : '?n=300');
+            try {
+                const resp = await fetch(url);
+                if (!resp.ok) return;
+                const j = await resp.json();
+
+                let mpu1Data = j.mpu1 || [];
+                let mpu2Data = j.mpu2 || [];
+
+                // Simpan data sensor terbaru untuk keperluan prediksi
+                if (mpu1Data.length > 0) latestMpu1 = mpu1Data[mpu1Data.length - 1];
+                if (mpu2Data.length > 0) latestMpu2 = mpu2Data[mpu2Data.length - 1];
+
+                let allData = [...mpu1Data, ...mpu2Data];
+                if (allData.length > 0) {
+                    allData.sort((a, b) => a.epoch_ms - b.epoch_ms);
+                    let maxEpoch = allData[allData.length - 1].epoch_ms;
+                    if (lastProcessedEpochMs === 0) {
+                        lastProcessedEpochMs = maxEpoch;
+                    } else {
+                        let newDataCount = allData.filter(d => d.epoch_ms > lastProcessedEpochMs).length;
+                        if (newDataCount > 0) {
+                            let deltaSeconds = (maxEpoch - lastProcessedEpochMs) / 1000.0;
+                            let rate = newDataCount / deltaSeconds;
+                            lastProcessedEpochMs = maxEpoch;
+                        }
+                    }
+                }
+
+                function buildSeries(arr) {
+                    if (!arr) return { times: [], accmag: [], gmag: [] };
+                    const times = arr.map(r => r.datetime || '');
+                    const accmag = arr.map(r => Math.sqrt( (Number(r.ax)||0)**2 + (Number(r.ay)||0)**2 + (Number(r.az)||0)**2 ));
+                    const gmag = arr.map(r => Math.sqrt( (Number(r.gx)||0)**2 + (Number(r.gy)||0)**2 + (Number(r.gz)||0)**2 ));
+                    return { times, accmag, gmag };
+                }
+
+                const s1 = buildSeries(mpu1Data);
+                const s2 = buildSeries(mpu2Data);
+                const maxPoints = 200;
+                const times = (s1.times.length >= s2.times.length) ? s1.times.slice(-maxPoints) : s2.times.slice(-maxPoints);
+
+                accChart.data.labels = times;
+                accChart.data.datasets[0].data = s1.accmag.slice(-times.length);
+                accChart.data.datasets[1].data = s2.accmag.slice(-times.length);
+                accChart.update('none');
+
+                //gyroChart.data.labels = times;
+                //gyroChart.data.datasets[0].data = s1.gmag.slice(-times.length);
+                //gyroChart.data.datasets[1].data = s2.gmag.slice(-times.length);
+                //gyroChart.update('none');
+
+                updateTable('#tbl1', mpu1Data);
+                updateTable('#tbl2', mpu2Data);
+
+            } catch (e) {
+                console.error('fetchLatest error', e);
+            }
+        }
+
+        async function fetchPrediction() {
+            // Jika belum ada data sensor sama sekali, jangan kirim request
+            if (!latestMpu1 && !latestMpu2) {
+                return;
+            }
+
+            // Susun payload sesuai format POST /predict yang baru (STRICTLY 6 kolom akselerometer)
+            const sample = {
+                ax1: latestMpu1 ? parseFloat(latestMpu1.ax) || 0.0 : 0.0,
+                ay1: latestMpu1 ? parseFloat(latestMpu1.ay) || 0.0 : 0.0,
+                az1: latestMpu1 ? parseFloat(latestMpu1.az) || 0.0 : 0.0,
+                ax2: latestMpu2 ? parseFloat(latestMpu2.ax) || 0.0 : 0.0,
+                ay2: latestMpu2 ? parseFloat(latestMpu2.ay) || 0.0 : 0.0,
+                az2: latestMpu2 ? parseFloat(latestMpu2.az) || 0.0 : 0.0
+            };
+
+            const payload = {
+                session_id: fileId || "default_device",
+                sample: sample,
+                thresh_ergo: currentThreshErgo, // Kirim threshold agar slider berfungsi
+                thresh_non: currentThreshNon
+            };
+
+            try {
+                const resp = await fetch('/predict', {
+                    method: 'POST', // UBAH DARI GET KE POST
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!resp.ok) {
+                    const errText = await resp.text();
+                    throw new Error(`API Error ${resp.status}: ${errText}`);
+                }
+
+                const data = await resp.json();
+
+                // Handle status buffering (model sedang mengumpulkan 25 sampel pertama)
+                if (data.status === 'buffering') {
+                    // document.getElementById('latestPrediction').innerHTML = lastPrediction;
+                    return; // Jangan update history atau warna card saat buffering
+                }
+
+                let predText = data.label || '--';
+                document.getElementById('latestPrediction').innerHTML = predText;
+
+                // Format probabilities baru adalah object: { 'ergonomis': 0.8, 'non-ergonomis': 0.2 }
+                const probs = data.probabilities;
+                let confidencePercent = 0;
+                if (probs) {
+                    const maxProb = Math.max(probs['ergonomis'] || 0, probs['non-ergonomis'] || 0);
+                    confidencePercent = (maxProb * 100).toFixed(1);
+                }
+                document.getElementById('confidence').innerHTML = `Confidence: ${confidencePercent}%`;
+
+                const cardElem = document.getElementById('predictionCard');
+                cardElem.classList.remove('prediction-salah', 'prediction-benar');
+                if (data.label === 'non-ergonomis') cardElem.classList.add('prediction-salah');
+                else if (data.label === 'ergonomis') cardElem.classList.add('prediction-benar');
+                
+                // Tambahkan ke history log (hanya jika label valid)
+                if (predText && predText !== '--' && predText !== 'menunggu_data') {
+                    addToHistory(predText, confidencePercent);
+                }
+
+            } catch (e) {
+                console.error('Prediction error:', e);
+                document.getElementById('latestPrediction').innerHTML = 'Error';
+                document.getElementById('confidence').innerHTML = 'Confidence: --%';
+            }
+        }
+
+        function updateTable(tblId, arr) {
+            const tbody = document.querySelector(tblId + ' tbody');
+            tbody.innerHTML = '';
+            const last = (arr || []).slice(-10).reverse();
+            for (const r of last) {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td>${r.datetime || ''}</td>
+                    <td>${r.ax != null ? (typeof r.ax.toFixed === 'function' ? r.ax.toFixed(5) : r.ax) : ''}</td>
+                    <td>${r.ay != null ? (typeof r.ay.toFixed === 'function' ? r.ay.toFixed(5) : r.ay) : ''}</td>
+                    <td>${r.az != null ? (typeof r.az.toFixed === 'function' ? r.az.toFixed(5) : r.az) : ''}</td>
+                `;
+                tbody.appendChild(tr);
+            }
+        }
+
+        let pollHandle = null;
+        function startPoll() {
+            if (pollHandle) clearInterval(pollHandle);
+            fetchLatest();
+            pollHandle = setInterval(fetchLatest, refreshInterval);
+
+            if (window.predictionIntervalHandle) clearInterval(window.predictionIntervalHandle);
+            window.predictionIntervalHandle = setInterval(fetchPrediction, predictionInterval);
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            loadThresholds();
+            initThresholdControls();
+            startPoll();
+        });
+            </script>
+</body>
+</html>

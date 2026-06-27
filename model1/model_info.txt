@@ -1,0 +1,66 @@
+
+INFORMASI MODEL XGBOOST
+=============================
+
+Nama Model:
+xgboost_model.pkl
+
+Scaler:
+scaler.pkl
+
+Jenis Model:
+XGBoost Classifier
+
+INPUT YANG DIPERLUKAN
+---------------------
+Model membutuhkan input berikut:
+
+['ax1_mean', 'ax1_std', 'ax1_min', 'ax1_max', 'ay1_mean', 'ay1_std', 'ay1_min', 'ay1_max', 'az1_mean', 'az1_std', 'az1_min', 'az1_max', 'ax2_mean', 'ax2_std', 'ax2_min', 'ax2_max', 'ay2_mean', 'ay2_std', 'ay2_min', 'ay2_max', 'az2_mean', 'az2_std', 'az2_min', 'az2_max']
+
+Jumlah fitur:
+24
+
+Catatan:
+- Urutan input HARUS sama seperti daftar fitur di atas
+- Data input harus melalui proses scaling
+  menggunakan scaler.pkl sebelum prediksi
+- Format input disarankan:
+  DataFrame pandas atau array numerik
+
+CONTOH ALUR PENGGUNAAN
+---------------------
+
+1. Load model:
+   xgb_model = joblib.load(
+       'xgboost_model.pkl'
+   )
+
+2. Load scaler:
+   scaler = joblib.load(
+       'scaler.pkl'
+   )
+
+3. Masukkan data baru
+
+4. Lakukan scaling:
+   data_scaled = scaler.transform(
+       data_baru
+   )
+
+5. Prediksi:
+   hasil = xgb_model.predict(
+       data_scaled
+   )
+
+OUTPUT YANG DIHASILKAN
+----------------------
+
+0 = non-ergonomis
+1 = ergonomis
+
+Interpretasi:
+- Output model berupa kelas numerik
+- Gunakan mapping di atas
+  untuk membaca hasil prediksi
+
+File dibuat otomatis setelah training.
